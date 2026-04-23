@@ -88,9 +88,12 @@ export class OrderWatcher extends EventEmitter {
   private async poll(): Promise<void> {
     try {
       const url = buildUrl();
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      const apiKey = CONFIG.UNISWAP_API_KEY;
+      if (apiKey) headers['x-api-key'] = apiKey;
       const resp = await axios.get<ApiOrdersResponse>(url, {
         timeout: 8_000,
-        headers: { Accept: 'application/json' },
+        headers,
       });
 
       const rawOrders: ApiOrder[] = resp.data.orders ?? [];

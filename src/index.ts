@@ -31,9 +31,12 @@ import { warmCache }          from './quotes/quoter';
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 
+const SHADOW_MODE = process.env.SHADOW_MODE === 'true';
+
 async function main(): Promise<void> {
   logger.info('═══════════════════════════════════════════════════');
   logger.info('  UniswapX Filler Starting — Arbitrum One');
+  if (SHADOW_MODE) logger.info('  *** SHADOW MODE — no transactions will be submitted ***');
   logger.info(`  Chain ID    : ${CONFIG.CHAIN_ID}`);
   logger.info(`  Reactors    : ${[...CONFIG.TRUSTED_REACTORS].join(', ')}`);
   logger.info(`  Min profit  : $${CONFIG.MIN_PROFIT_USD}`);
@@ -42,34 +45,45 @@ async function main(): Promise<void> {
   logger.info('═══════════════════════════════════════════════════');
 
   // ── 1. Validate essential config ────────────────────────────────────────
-  if (!process.env.RPC_URL_ARBITRUM)    throw new Error('RPC_URL_ARBITRUM not set');
-  if (!process.env.FILLER_PRIVATE_KEY)  throw new Error('FILLER_PRIVATE_KEY not set');
+  if (!process.env.RPC_URL_ARBITRUM) throw new Error('RPC_URL_ARBITRUM not set');
+  if (!SHADOW_MODE && !process.env.FILLER_PRIVATE_KEY) throw new Error('FILLER_PRIVATE_KEY not set');
+  if (!process.env.UNISWAP_API_KEY)  logger.warn('[startup] UNISWAP_API_KEY not set — API may reject requests (get one at developer.uniswap.org)');
 
   // ── 2. Initialise signer + nonce manager ────────────────────────────────
   const httpProvider = getHttpProvider();
-  const signer       = new ethers.Wallet(CONFIG.PRIVATE_KEY, httpProvider);
+
+  // In shadow mode we use a random throwaway wallet — no real key needed
+  // ethers v6: createRandom() returns HDNodeWallet; cast to Wallet for type compat
+  const signer: ethers.Wallet = SHADOW_MODE
+    ? (ethers.Wallet.createRandom().connect(httpProvider) as unknown as ethers.Wallet)
+    : new ethers.Wallet(CONFIG.PRIVATE_KEY, httpProvider);
   const nonceManager = new NonceManager(signer.address, httpProvider);
 
-  logger.info(`  Filler wallet: ${signer.address}`);
-
-  // Check ETH balance (needs gas)
-  const ethBalance = await httpProvider.getBalance(signer.address);
-  logger.info(`  ETH balance  : ${ethers.formatEther(ethBalance)} ETH`);
-  if (ethBalance < ethers.parseEther('0.005')) {
-    logger.warn('[startup] Low ETH balance — may run out of gas for fills!');
+  if (!SHADOW_MODE) {
+    logger.info(`  Filler wallet: ${signer.address}`);
+    const ethBalance = await httpProvider.getBalance(signer.address);
+    logger.info(`  ETH balance  : ${ethers.formatEther(ethBalance)} ETH`);
+    if (ethBalance < ethers.parseEther('0.005')) {
+      logger.warn('[startup] Low ETH balance — may run out of gas for fills!');
+    }
+    await nonceManager.init();
+  } else {
+    logger.info('  [shadow] Wallet: ephemeral (no keys loaded)');
   }
-
-  await nonceManager.init();
 
   // ── 3. Initialise WebSocket provider ────────────────────────────────────
   initWsProvider();
 
   // ── 4. Pre-approve common output tokens on all trusted reactors ──────────
-  const commonOutputTokens = [
-    CONFIG.USDC, CONFIG.USDC_E, CONFIG.USDT, CONFIG.DAI, CONFIG.WETH,
-  ];
-  for (const reactorAddr of CONFIG.TRUSTED_REACTORS) {
-    await ensureApprovals(signer, commonOutputTokens, reactorAddr);
+  if (!SHADOW_MODE) {
+    const commonOutputTokens = [
+      CONFIG.USDC, CONFIG.USDC_E, CONFIG.USDT, CONFIG.DAI, CONFIG.WETH,
+    ];
+    for (const reactorAddr of CONFIG.TRUSTED_REACTORS) {
+      await ensureApprovals(signer, commonOutputTokens, reactorAddr);
+    }
+  } else {
+    logger.info('[startup] Shadow mode — skipping token approvals');
   }
 
   // ── 5. Block-level cache warmer ──────────────────────────────────────────
@@ -175,6 +189,19 @@ async function processOrder(
 
   if (!profitResult.profitable) {
     logger.debug(`[main] Not profitable ${hash.slice(0, 12)}: ${profitResult.reason}`);
+    return;
+  }
+
+  // ── Shadow mode: log and stop — no tx submitted ───────────────────────────
+  if (SHADOW_MODE) {
+    logger.info(
+      `[SHADOW] WOULD FILL ${hash.slice(0, 16)}…  ` +
+      `in=${order.input.token.slice(0, 10)} → out=${order.outputs[0].token.slice(0, 10)}  ` +
+      `gross=$${profitResult.grossProfitUsd.toFixed(4)}  ` +
+      `gas=$${profitResult.gasCostUsd.toFixed(4)}  ` +
+      `net=$${profitResult.netProfitUsd.toFixed(4)}`,
+    );
+    metrics.recordFill({ netProfitUsd: profitResult.netProfitUsd, latencyMs: Date.now() - order.discoveredAtMs, gasUsedUsd: profitResult.gasCostUsd });
     return;
   }
 

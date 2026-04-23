@@ -62,8 +62,9 @@ export const CONFIG = {
   ]),
 
   // ── UniswapX Orders API ─────────────────────────────────────
-  // v2 endpoint requires x-api-key header (get from developer.uniswap.org)
-  UNISWAPX_API:     'https://api.uniswap.org/v2/dutch-auction/orders',
+  // Correct v2 endpoint — /v2/orders (NOT /v2/dutch-auction/orders, that path is 403)
+  // Requires x-api-key header from developer.uniswap.org
+  UNISWAPX_API:     'https://api.uniswap.org/v2/orders',
   get UNISWAP_API_KEY() { return process.env.UNISWAP_API_KEY ?? ''; },
   POLL_INTERVAL_MS: 1_500,  // 1.5 s — roughly every 3 Arbitrum blocks
 

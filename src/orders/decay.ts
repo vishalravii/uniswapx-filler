@@ -24,9 +24,9 @@ export function linearDecay(
   decayEndTime:   number,
   nowSecs:        number,
 ): bigint {
-  if (nowSecs <= decayStartTime) return startAmount;
-  if (nowSecs >= decayEndTime)   return endAmount;
   if (decayEndTime === decayStartTime) return endAmount;
+  if (nowSecs < decayStartTime) return startAmount;
+  if (nowSecs >= decayEndTime)  return endAmount;
 
   const elapsed  = BigInt(nowSecs - decayStartTime);
   const duration = BigInt(decayEndTime - decayStartTime);
